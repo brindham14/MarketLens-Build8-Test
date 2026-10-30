@@ -1,0 +1,11 @@
+BUILD 9 — STOCK CHART FIX
+
+Root cause found: showStock() called drawChart(points) when no local OHLCV candle file existed, but no drawChart() function was defined in app.js. As a result, the fallback close-history chart could not render.
+
+Fix: implemented drawCloseHistory() using actual closeHistory points normalized from data/history.json. It draws a responsive price line chart, labels dates and price levels, and supports 1M/3M/6M/1Y/ALL ranges. It redraws when the modal is resized.
+
+Data limitation: history.json contains 705 stock close series (1,934 dates). It does not contain OHLCV. Other symbols among the 2,193-stock summary have no historical series in this snapshot, so they cannot show a chart until the data pipeline supplies history. No fabricated data is used.
+
+For symbols with validated data/candles/SYMBOL.json files, the existing OHLCV candlestick renderer remains available. Such files were not included in the uploaded snapshot.
+
+Checks: node --check app.js passed; history structure verified; browser/GitHub Pages QA remains to be done by opening the deployed test site.

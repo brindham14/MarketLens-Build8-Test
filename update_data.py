@@ -62,8 +62,21 @@ for i in range(0, len(syms), 50):
         print("batch failed", b[:3], e); continue
     for s in b:
         try:
-            df = raw[s + ".NS"].dropna(subset=["Open", "High", "Low", "Close"])
-            if len(df) >= 30: frames[s] = df
+            df = raw[s + ".NS"].dropna(subset=["Open", "High", "Low", "Close", "Volume"]).copy()
+            # Reject malformed / zero-volume rows rather than serializing missing
+            # volume as a fabricated zero in the candle file.
+            for col in ("Open", "High", "Low", "Close", "Volume"):
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+            df = df.dropna(subset=["Open", "High", "Low", "Close", "Volume"])
+            valid = (
+                (df["Open"] > 0) & (df["High"] > 0) & (df["Low"] > 0) &
+                (df["Close"] > 0) & (df["Volume"] > 0) &
+                (df["High"] >= df[["Open", "Close", "Low"]].max(axis=1)) &
+                (df["Low"] <= df[["Open", "Close"]].min(axis=1))
+            )
+            df = df.loc[valid].sort_index()
+            df = df.loc[~df.index.duplicated(keep="last")]
+            if len(df) >= 260: frames[s] = df
         except Exception: pass
 print(f"{len(frames)}/{len(syms)} symbols downloaded")
 if not frames: sys.exit("no data downloaded - nothing written")
@@ -81,11 +94,33 @@ for tk in ("^CRSLDX", "^NSEI"):
 
 r2 = lambda x: [round(float(v), 2) for v in x]
 def write_candles(name, df):
-    json.dump({"d": [t.strftime("%Y-%m-%d") for t in df.index], "o": r2(df.Open), "h": r2(df.High), "l": r2(df.Low),
-               "c": r2(df.Close), "v": [int(v) for v in df.Volume.fillna(0)], "sample": 0},
-              open(f"{OUT}/candles/{name}.json", "w"), separators=(",", ":"))
-for s, df in frames.items(): write_candles(s, df)
-if bench is not None: write_candles("_NIFTY500", bench)
+    # Validate before replacing a previously good file. Use an atomic rename so
+    # an interrupted update cannot leave a truncated JSON candle file.
+    cols = ["Open", "High", "Low", "Close", "Volume"]
+    x = df.dropna(subset=cols).copy()
+    for col in cols: x[col] = pd.to_numeric(x[col], errors="coerce")
+    x = x.dropna(subset=cols).sort_index()
+    x = x.loc[~x.index.duplicated(keep="last")]
+    valid = (
+        (x.Open > 0) & (x.High > 0) & (x.Low > 0) & (x.Close > 0) & (x.Volume > 0) &
+        (x.High >= x[["Open", "Close", "Low"]].max(axis=1)) &
+        (x.Low <= x[["Open", "Close"]].min(axis=1))
+    )
+    x = x.loc[valid]
+    if len(x) < 260:
+        raise ValueError(f"{name}: only {len(x)} valid OHLCV rows; keeping previous candle file")
+    payload = {"d": [t.strftime("%Y-%m-%d") for t in x.index], "o": r2(x.Open), "h": r2(x.High),
+               "l": r2(x.Low), "c": r2(x.Close), "v": [int(v) for v in x.Volume], "sample": 0}
+    path = f"{OUT}/candles/{name}.json"
+    tmp = path + ".tmp"
+    with open(tmp, "w") as fp: json.dump(payload, fp, separators=(",", ":"))
+    os.replace(tmp, path)
+for s, df in frames.items():
+    try: write_candles(s, df)
+    except Exception as e: print(f"candle file not refreshed for {s}: {e}")
+if bench is not None:
+    try: write_candles("_NIFTY500", bench)
+    except Exception as e: print(f"benchmark candle file not refreshed: {e}")
 
 # ---------------------------------------------------------------- helpers
 def sma(a, n): return float(np.mean(a[-n:])) if len(a) >= n else np.nan
@@ -109,7 +144,13 @@ def darvas(h, l, per=252, near=5):
 
 def pattern_fields(o, h, l, c, v):
     """Pattern / setup fields for one stock from daily OHLCV (arrays, latest last)."""
-    n = len(c); f = {}
+    n = len(c); f = {"vcp": 0, "pp": 0, "fl": 0, "cup": 0,
+                     "dvb": 0, "dvi": 0, "my": 0,
+                     "breakoutToday": 0, "cupBreakoutToday": 0,
+                     "vcpBreakoutToday": 0, "flagBreakoutToday": 0,
+                     "darvasBreakoutToday": 0,
+                     "vcpState": "unavailable", "cupState": "unavailable",
+                     "flagState": "unavailable", "darvasState": "unavailable"}
     price = c[-1]
     ma50, ma150, ma200 = sma(c, 50), sma(c, 150), sma(c, 200)
     f["a50"] = int(price > ma50) if ma50 == ma50 else 0
@@ -140,7 +181,12 @@ def pattern_fields(o, h, l, c, v):
     if n > 130:
         d1, d2, d3 = (depth_in(h[a:b], l[a:b]) for a, b in ((-60, -40), (-40, -20), (-20, None)))
         f["pbs"] = [round(d1, 1), round(d2, 1), round(d3, 1)]
-        f["vcp"] = int(d1 > d2 > d3 and d3 <= 8 and (f["v10"] or 9) < 1 and f["a50"] and price >= 0.85 * np.max(h[-252:]))
+        # Treat zero/invalid volume as unavailable, not as evidence of dry-up.
+        dry_volume = f["v10"] is not None and 0 < f["v10"] < 1
+        f["vcp"] = int(d1 > d2 > d3 and d3 <= 8 and dry_volume and f["a50"] and price >= 0.85 * np.max(h[-252:]))
+        prior_pivot = float(np.max(h[-21:-1]))
+        f["vcpBreakoutToday"] = int(bool(f["vcp"]) and c[-1] > prior_pivot and c[-2] <= prior_pivot)
+        f["vcpState"] = "breakout_today" if f["vcpBreakoutToday"] else "candidate" if f["vcp"] else "not_qualifying"
     # Tight weeks: consecutive weekly closes within 1.5%
     return f
 
@@ -153,26 +199,40 @@ def weekly_tight(close_series):
     return t
 
 def flag_cup_my(h, l, c):
-    f = {}; n = len(c); price = c[-1]
-    # Flag: >=25% run-up into a recent high, then a tight (<=12%) pullback
+    f = {"fl": 0, "cup": 0, "dvb": 0, "dvi": 0, "my": 0,
+         "cupBreakoutToday": 0}; n = len(c); price = c[-1]
+    # Flag: >=25% run-up into a recent high, then a tight (<=12%) pullback.
+    # The breakout signal is a close crossing the pole high on the latest session.
     if n > 80:
-        pk = n - 25 + int(np.argmax(h[-25:])); since = n - 1 - pk
-        base_low = float(np.min(l[max(0, pk - 40):pk + 1]))
-        pole = (h[pk] / base_low - 1) * 100; fd = (h[pk] - np.min(l[pk:])) / h[pk] * 100
+        # Identify the flag pole and consolidation from completed bars only.
+        # The latest bar is reserved for detecting a possible breakout.
+        hp, lp, cp = h[:-1], l[:-1], c[:-1]
+        pk = len(hp) - 25 + int(np.argmax(hp[-25:])); since = len(hp) - 1 - pk
+        base_low = float(np.min(lp[max(0, pk - 40):pk + 1]))
+        pole = (hp[pk] / base_low - 1) * 100; fd = (hp[pk] - np.min(lp[pk:])) / hp[pk] * 100
         f["pole"], f["fD"] = round(float(pole), 1), round(float(fd), 1)
-        f["fl"] = int(pole >= 25 and fd <= 12 and 3 <= since <= 25 and price >= 0.85 * h[pk])
-    # Cup with handle
+        f["fl"] = int(pole >= 25 and fd <= 12 and 3 <= since <= 25 and price >= 0.85 * hp[pk])
+        f["flagBreakoutToday"] = int(bool(f["fl"]) and c[-1] > hp[pk] and c[-2] <= hp[pk])
+        f["flagState"] = "breakout_today" if f["flagBreakoutToday"] else "candidate" if f["fl"] else "not_qualifying"
+    # Cup with handle: construct the cup/handle from completed bars, then test
+    # the latest close against the prior right-rim pivot. This prevents today's
+    # breakout bar from becoming the new rim and hiding its own breakout.
     if n > 200:
-        win = h[-150:-35]; L = n - 150 + int(np.argmax(win)); HL = float(h[L])
-        B = L + 1 + int(np.argmin(l[L + 1:])); LB = float(l[B])
+        hp, lp, cp = h[:-1], l[:-1], c[:-1]
+        win = hp[-150:-35]; L = len(hp) - 150 + int(np.argmax(win)); HL = float(hp[L])
+        B = L + 1 + int(np.argmin(lp[L + 1:])); LB = float(lp[B])
         depth = (HL - LB) / HL * 100
-        r = B + int(np.argmax(h[B:])); HR = float(h[r])
-        hand = n - 1 - r
+        r = B + int(np.argmax(hp[B:])); HR = float(hp[r])
+        hand = len(hp) - 1 - r
         if 12 <= depth <= 40 and r - L >= 35 and B - L >= 15 and r - B >= 15 and HR >= 0.92 * HL and 3 <= hand <= 25:
-            hl = float(np.min(l[r + 1:])); hd = (HR - hl) / HR * 100
+            hl = float(np.min(lp[r + 1:])); hd = (HR - hl) / HR * 100
             if hd <= 12 and hl >= LB + 0.5 * (HL - LB) and price >= 0.92 * HR and price > sma(c, 50):
-                f["cup"] = 1; f["cupD"] = round(depth, 1); f["hD"] = round(hd, 1); f["pv"] = round(HR, 2)
-                f["pivotHeldSessions"] = int(hand); f["breakoutToday"] = int(c[-1] > HR and c[-2] <= HR)
+                f["cup"] = 1; f["cupD"] = round(depth, 1); f["hD"] = round(hd, 1)
+                f["cupPivot"] = round(HR, 2)
+                f["cupPivotHeldSessions"] = int(hand)
+                f["cupBreakoutToday"] = int(c[-1] > HR and c[-2] <= HR)
+                f["cupState"] = "breakout_today" if f["cupBreakoutToday"] else "candidate"
+    if f["cupState"] == "unavailable" and n > 200: f["cupState"] = "not_qualifying"
     # Multi-year breakout: closes above the highest high of the last ~3 years (older than 60 sessions)
     if n > 400:
         look = min(n - 1, 756); seg = h[-look:-60]; ci = n - look + int(np.argmax(seg)); C = float(h[ci])
@@ -187,8 +247,13 @@ def flag_cup_my(h, l, c):
         if n - 1 - k <= 150:
             after = c[j + 1:]
             first_above = np.where(after > top)[0]
-            if len(first_above) and (j + 1 + first_above[0]) >= n - 5 and price > top: f["dvb"] = 1
-            elif not len(first_above) and bot <= price <= top and price >= top * 0.95: f["dvi"] = 1
+            if len(first_above) and (j + 1 + first_above[0]) >= n - 5 and price > top:
+                f["dvb"] = 1
+                f["darvasBreakoutToday"] = int(c[-1] > top and c[-2] <= top)
+                f["darvasState"] = "breakout_today" if f["darvasBreakoutToday"] else "breakout_recent"
+            elif not len(first_above) and bot <= price <= top and price >= top * 0.95:
+                f["dvi"] = 1; f["darvasState"] = "forming"
+    if f["darvasState"] == "unavailable": f["darvasState"] = "not_qualifying"
     return f
 
 # ---------------------------------------------------------------- per-stock features
@@ -217,6 +282,9 @@ for s, df in frames.items():
              fromHigh=round(float((price / np.max(h[-252:]) - 1) * 100), 1),
              turnover=round(float(np.mean(c[-50:] * v[-50:]) / 1e7), 1))
     f.update(pattern_fields(o, h, l, c, v)); f.update(flag_cup_my(h, l, c))
+    # Explicit membership from the official NSE Nifty Total Market constituent file.
+    # Never infer index membership from sector assignment or the broad NSE universe.
+    f["inNiftyTotalMarket"] = bool(s in TM) if TM else None
     f["tw"] = weekly_tight(df.Close)
     # trend-template pieces that do not depend on RS
     lo52, hi52 = float(np.min(l[-252:])), float(np.max(h[-252:])); ma50 = sma(c, 50)

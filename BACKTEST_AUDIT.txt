@@ -1,0 +1,30 @@
+MARKETLENS BACKTEST AUDIT — BUILD 6
+
+Implemented in this build:
+- Added a monthly-rebalanced equal-weight momentum research simulation using the uploaded daily close history.
+- Signal is calculated using data available 21 sessions before each month-end rebalance, avoiding use of the latest month in the ranking signal.
+- Score: 40% 3-month + 20% 6-month + 20% 9-month + 20% 12-month return, measured at the signal date.
+- Return lookbacks use trading-session counts (63/126/189/252 sessions); rebalance dates are actual final available trading dates in each month.
+- Holdings are equal-weighted, with selectable top 10/20/30/50.
+- A monthly period is included only if every selected stock has valid start and end closes; otherwise it is skipped and counted.
+- Displays ending value, total return, CAGR, month-end max drawdown, positive-month count, skipped periods, latest holdings and recent monthly returns.
+- The simulation uses close-to-close returns from the supplied history and does not fabricate OHLCV or benchmark returns.
+
+Reproducible result on the uploaded snapshot, default Top 20:
+- Included monthly periods: 80
+- Skipped periods: 0
+- Start period: 2020-02-28 to 2020-03-31
+- Last period: 2026-09-30 to 2026-10-29
+- Starting capital: ₹100,000
+- Ending value: ₹2,019,426.86
+- Total return: 1,919.43%
+- CAGR: 56.96%
+- Month-end max drawdown: -26.82%
+- Positive months: 59 of 80
+
+CRITICAL INTERPRETATION / LIMITATIONS:
+- The historical file contains 705 currently tracked stocks, not a point-in-time historical NSE universe. This creates material survivorship and selection bias. The performance figures are NOT representative of an investable strategy and must not be used as expected returns or a buy/sell decision.
+- No historical delisted stocks, point-in-time index membership, IPO availability history, corporate-action validation, benchmark series, transaction costs, taxes, bid-ask spreads, slippage, market impact, or execution model.
+- Current universe and historical price availability may be incomplete. The strategy has no guarantee that selected stocks could have been purchased at the assumed closing prices.
+- This is one research prototype only. Strategy Backtest, MA Crossover, Market Breadth, Sector Rotation and Mean Reversion engines have not all been implemented or validated by this stage.
+- No browser UI integration test or live deployment test was performed. JavaScript syntax check passed; Python updater syntax check passed.

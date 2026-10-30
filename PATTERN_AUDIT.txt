@@ -1,0 +1,32 @@
+MARKETLENS PATTERN AUDIT — BUILD 3
+
+Changes in this build:
+- One shared pattern flag source is used by the Screener, Popular Scans and stock detail view.
+- Screener now has Cup & Handle, Flag, Pocket Pivot and Darvas breakout filters in addition to VCP and generic pivot breakout.
+- Pattern detail distinguishes Candidate, Forming, Recent Breakout and Not Qualifying where the uploaded fields support that status.
+- Generic pivot breakout remains separate from Cup & Handle, Flag and Darvas breakout fields.
+- VCP volume dry-up no longer treats zero/invalid volume as evidence of contraction.
+- Flag and Cup & Handle geometry uses completed bars, reserving the latest bar for breakout detection so a breakout bar cannot replace the prior pivot.
+- Cup & Handle logic still checks numerical depth/duration/rim/handle conditions; it cannot prove a smooth rounded U. Visual chart confirmation remains required.
+
+Uploaded snapshot (asOf 2026-10-29):
+- Universe: 2,193 summary rows.
+- VCP flagged: 3.
+- Cup & Handle flagged: 4.
+- Flag flagged: 20.
+- Pocket Pivot flagged: 104.
+- Darvas breakout flag: 24 (the pipeline definition allows a cross in the latest five sessions, not necessarily today).
+- Darvas box flag: 53.
+- Multi-year breakout zone: 78.
+
+Important data limitations:
+- The uploaded history.json contains close-only history for 705 symbols. It is not OHLCV.
+- Individual candle JSON files were not included in the uploaded attachments. The updated updater writes candle files when its data download succeeds.
+- The existing snapshot does not include per-pattern breakout-today fields. This build deliberately leaves those statuses unavailable rather than inferring them from a generic pivot.
+- Chart-by-chart visual confirmation and live OHLCV execution tests remain pending.
+
+Validation:
+- app.js passes Node syntax validation.
+- update_data.py passes Python bytecode compilation.
+- Uploaded JSON files parse successfully.
+- Screener filter IDs and event bindings are present exactly once.

@@ -1,0 +1,22 @@
+MARKETLENS CHART / OHLCV — BUILD 5 VALIDATION PASS
+
+Changes:
+- Updater rejects rows with missing OHLCV values, non-positive OHLC prices, zero/missing volume, invalid high/low relationships, duplicate dates, and unsorted rows before generating stock candle files.
+- Candle JSON writes are validated and atomic (temporary file + replace), so an interrupted write does not truncate a previous good file.
+- A failed/insufficient stock candle refresh is logged and does not stop all other symbols from being processed.
+- Benchmark candle refresh failure is logged separately and does not abort the stock update.
+- Browser candle validation now also requires ISO date strings in strictly increasing order and positive OHLC prices, in addition to equal array lengths, finite values, OHLC consistency, and non-negative volume.
+- RSI(14) now returns 50 for a completely flat series (no gains and no losses), instead of incorrectly returning 100.
+
+Tests performed:
+- Static JavaScript syntax check.
+- Python updater syntax check.
+- Synthetic OHLCV fixture tests for valid arrays, mismatched lengths, invalid OHLC, duplicate/out-of-order dates, missing volume and atomic file replacement.
+- Indicator reference tests for EMA, SMA, Wilder RSI, ATR/Supertrend and prior-50-session RVOL on deterministic fixture data.
+
+Important limitations:
+- The uploaded dataset still contains no real per-symbol candle JSON files. Therefore no actual NSE OHLCV series or live indicator values can be validated against the user's production data in this environment.
+- The updater was not run against live Yahoo/NSE sources or the user's GitHub Actions environment.
+- Chart still has no volume histogram, zoom/pan, drawings, benchmark overlay or lower RSI pane.
+- Mobile browser/device test and live deployment test remain pending.
+- This build improves data-quality gates; it does not prove upstream yfinance data completeness or guarantee provider uptime.
